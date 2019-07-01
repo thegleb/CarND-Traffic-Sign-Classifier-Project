@@ -43,6 +43,20 @@ You're reading it! and here is a link to my [project code](./Traffic_Sign_Classi
 
 I used plain Python to calculate summary statistics of the traffic signs data set:
 
+```python
+n_train = len(X_train)
+n_validation = len(X_valid)
+n_test = len(X_test)
+image_shape = np.shape(X_train[0])
+n_classes = len(np.unique(y_test))
+
+print("Number of training examples =", n_train)
+print("Number of testing examples =", n_test)
+print("Number of validation examples =", n_validation)
+print("Image data shape =", image_shape)
+print("Number of classes =", n_classes)
+```
+
 * The size of training set is 34799
 * The size of the validation set is 4410
 * The size of test set is 12630
@@ -52,6 +66,32 @@ I used plain Python to calculate summary statistics of the traffic signs data se
 #### 2. Include an exploratory visualization of the dataset.
 
 I started with simply outputting the count of images per class, but ended up using a bar chart to visualize the density of test data for each class:
+
+```python
+def count_classes(labels):
+    """
+    Count the number of images in each class
+    """
+    data_breakdown = {}
+    for i, img_class in enumerate(labels):
+        if str(img_class) in data_breakdown.keys():
+            data_breakdown[str(img_class)] = data_breakdown[str(img_class)] + 1
+        else:
+            data_breakdown[str(img_class)] = 1
+    return data_breakdown
+
+training_data_breakdown = count_classes(y_train)
+
+num_images_per_class = []
+for i in range(n_classes):
+    num_images_per_class.append(training_data_breakdown[str(i)])
+
+fig = plt.figure(figsize=(12, 4))
+ax = fig.add_subplot(111)
+ax.set_xticks(range(n_classes)) 
+ax.bar(range(n_classes), num_images_per_class, align='center')
+ax.set_title('Num images per class')
+```
 
 ![alt text][image1]
 
@@ -64,9 +104,28 @@ This was the gist of the image processing:
 * Take the Y channel (discard the rest)
 * Apply contrast limited adaptive histogram equalization (CLAHE) to this Y channel
 
+```python
+def preprocess(img):
+    """
+    Normalize brightness by converting to YUV and applying an aggressive CLAHE to the Y channel.
+    The high clipLimit seems to be pretty aggressive with local contrast, which helps the signs stand out
+    """
+    clahe = cv2.createCLAHE(clipLimit=200.0, tileGridSize=(6,6))
+
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
+    Y_channel = img[:,:,0]
+    img[:,:,0] = clahe.apply(Y_channel)
+    return np.array(img[:,:,0]).reshape(32,32,1)
+```
+
 ![alt text][image2]
 
 Finally, the CLAHE-processed image was normalized to both reduce the numeric variation in the pixel data as well as "center" it around 0 (values are -1.0 to 1.0 instead of 0 to 255)
+
+```python
+def normalize(img):
+    return (img - 128) / 128
+```
 
 After some experimentation using the basic data set, I decided to create additional training data using
 guidelines set forth in the [sermanet](http://yann.lecun.com/exdb/publis/pdf/sermanet-ijcnn-11.pdf) paper.
@@ -76,10 +135,83 @@ To add more data to the training set, I applied a combination of:
 * rotating the image a random amount between -15 and 15 degrees
 * shifting the image between -2 and 2 pixels in both the x and y directions
 
-I added 4 of these randomly jittered images to the training data
+```python
+
+def jitter_position(img):
+    """
+    Randomly shift the image by up to 2 pixels in the x and/or y directions
+    """
+    x_d = random.randint(-2, 2)
+    y_d = random.randint(-2, 2)
+    rows, cols, channels = img.shape
+    M = np.float32([[1, 0, x_d],[0, 1, y_d]])
+
+    return cv2.warpAffine(img, M, (cols, rows))
+
+def jitter_rotation(img):
+    """
+    Randomly rotate the image between -15 and 15 degrees
+    """
+    rows, cols, channels = img.shape
+    angle = random.randint(-15, 15)
+    M = cv2.getRotationMatrix2D((cols/2, rows/2), angle, 1)
+
+    return cv2.warpAffine(img, M, (cols, rows))
+
+def jitter_scale(img):
+    """
+    Randomly change the scale of the image in both x and y directions
+    """
+    x_scale = random.uniform(0.9, 1.1)
+    y_scale = random.uniform(0.9, 1.1)
+    rows, cols, channels = img.shape
+    zeroed_image = np.zeros_like(img)
+    return cv2.resize(img, (32,32), fx=x_scale, fy=y_scale, interpolation = cv2.INTER_CUBIC)
+
+def blur(img):
+    """
+    Simple gaussian blur
+    """
+    return cv2.GaussianBlur(img,(3,3),0)
+
+def jitter(img):
+    """
+    Combine all the jitter transforms together
+    """
+    return jitter_position(jitter_rotation(jitter_scale(img)))
+
+```
+I added 4 of these randomly jittered images to the training data.
+
+```python
+X_train_processed = []
+for i, img in enumerate(X_train):
+    # add original image with processing
+    X_train_processed.append(process(img))
+    y_train_processed.append(y_train[i])
+
+    # add jittered data
+    X_train_processed.append(process(jitter(img)))
+    y_train_processed.append(y_train[i])
+
+    X_train_processed.append(process(jitter(img)))
+    y_train_processed.append(y_train[i])
+
+    X_train_processed.append(process(jitter(img)))
+    y_train_processed.append(y_train[i])
+
+    X_train_processed.append(process(jitter(img)))
+    y_train_processed.append(y_train[i])
+```
+
 
 Validation data can contain images that are slightly blurrier than others, so I added one more copy of each image
 with a 3x3 Gaussian blur applied.
+
+```python
+    X_train_processed.append(process(blur(jitter(img))))
+    y_train_processed.append(y_train[i])
+```
 
 A total of 5 additional images were created for each training data image.
 
@@ -103,6 +235,60 @@ and the second stage finding something more generalized. I tried to emulate aspe
 I stuck with the same ReLU activation I had with LeNet-5 and added a random dropout of 0.3 to both convolutional layers
 because this seemed to help validation accuracy change in a predictable manner.
 
+```python
+def TrafficSignClassifier(x): 
+    mu = 0
+    sigma = 0.1
+    
+    weights = {
+    'w_conv1': tf.Variable(tf.truncated_normal([5, 5, num_channels, 108], mean=mu, stddev=sigma)),
+    'w_conv2': tf.Variable(tf.truncated_normal([5, 5, 108, 200], mean=mu, stddev=sigma)),
+    'w_fc1': tf.Variable(tf.truncated_normal(shape=(26168, 100), mean=mu, stddev=sigma)),
+    'w_fc2': tf.Variable(tf.truncated_normal(shape=(100, n_classes), mean=mu, stddev=sigma)),
+    }
+
+    biases = {
+    'b_conv1': tf.Variable(tf.zeros(108)),
+    'b_conv2': tf.Variable(tf.zeros(200)),
+    'b_fc1': tf.Variable(tf.zeros(100)),
+    'b_fc2': tf.Variable(tf.zeros(n_classes)),
+    }
+
+    # 32x32x1 -> 28x28x108
+    conv1 = tf.nn.conv2d(x, weights['w_conv1'], strides=[1, 1, 1, 1], padding='VALID') + biases['b_conv1']
+    conv1 = tf.nn.relu(conv1)
+    # dropout
+    conv1 = tf.nn.dropout(conv1, keep_prob_cv)
+
+    # 28x28x108 -> 14x14x108
+    conv1 = maxpool2d(conv1)
+
+    # 14x14x108 -> 10x10x200
+    conv2 = tf.nn.conv2d(conv1, weights['w_conv2'], strides=[1, 1, 1, 1], padding='VALID') + biases['b_conv2']
+    conv2 = tf.nn.relu(conv2)
+    conv2 = tf.nn.dropout(conv2, keep_prob_cv)
+
+    # 10x10x200 -> 5x5x200
+    conv2 = maxpool2d(conv2, 2)
+
+    # flatten to get a 21168 element hi res representation of layer 1 
+    x_hi_res = flatten(conv1)
+    # flatten to get a 5000 element lo res representation of layer 2
+    x_lo_res = flatten(conv2)
+    
+    # 21168 + 5000 -> 26168
+    fc1 = tf.concat([x_hi_res, x_lo_res], -1)
+    fc1 = tf.nn.relu(fc1)
+
+    # 26168 -> 100
+    fc2 = tf.matmul(fc1, weights['w_fc1']) + biases['b_fc1']
+    fc2 = tf.nn.relu(fc2)
+
+    # 100 -> 43
+    logits = tf.matmul(fc2, weights['w_fc2']) + biases['b_fc2']
+    return logits, conv1, conv2
+```
+
 | Layer         		|     Description	        					| 
 |:---------------------:|:---------------------------------------------:| 
 | Input         		| 32x32x1 image (processed Y channel)			| 
@@ -124,6 +310,15 @@ because this seemed to help validation accuracy change in a predictable manner.
 
 #### 3. Describe how you trained your model. The discussion can include the type of optimizer, the batch size, number of epochs and any hyperparameters such as learning rate.
 
+For the optimizer I stuck with the one from the LeNet-5 lab in the previous section:
+
+```python
+cross_entropy = tf.nn.softmax_cross_entropy_with_logits(labels=one_hot_y, logits=logits)
+loss_operation = tf.reduce_mean(cross_entropy)
+optimizer = tf.train.AdamOptimizer(learning_rate = rate)
+training_operation = optimizer.minimize(loss_operation)
+```
+
 I initially started with a batch size of 128, before reducing it to 64, and then increasing it back to 128 when I realized that I wasn't seeing drastic differences between the 2. 
 
 The learning rate I found that worked the best for a while was 0.0025, but in later iterations I reduced it to 0.0015 without much ill effect.
@@ -136,6 +331,8 @@ My final model results were:
 * training set accuracy of 0.997
 * validation set accuracy of 0.947 
 * test set accuracy of 0.909
+
+Due to the high training set accuracy, I suspect I have overfit the training set, and if I were to work on this further, I would try to gain more validation set accuracy at the expense of training set accuracy.
 
 * What was the first architecture that was tried and why was it chosen?
 
@@ -252,6 +449,6 @@ For the fifth image we are extremely sure it is a "Turn right ahead" sign, which
 ### (Optional) Visualizing the Neural Network (See Step 4 of the Ipython notebook for more details)
 #### 1. Discuss the visual output of your trained network's feature maps. What characteristics did the neural network use to make classifications?
 
-Here is the output of the first convolutional layer (14x14x108) for the first downloaded image ("80 km/h"). It appears that some of these features look at overall shape (e.g. 91, 71) and some activate more strongly for details inside the sign, such as 24 or to a lesser extent 81. Maybe I have more features than I need, or some of these features activate more strongly for other kinds of signs.
+Here is the output of the first convolutional layer (14x14x108) for the first downloaded image ("80 km/h"). It appears that some of these features look at overall shape (e.g. 91, 71) and some activate more strongly for details inside the sign, such as 24 or to a lesser extent 81. Looking at these features, it is possible I have more features than I need, or some of these features activate more strongly for other kinds of signs.
 
 ![Output of the first convolutional layer][image9]
